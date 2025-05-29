@@ -1,7 +1,7 @@
 # NX_Homebrews
-# Nintendo Switch Homebrews & Projecten
-# Developer: Kenneth van der Maazen
-# Laatst bijgewerkt: 29-05-2025
+Nintendo Switch Homebrews & Projecten\
+Developer: Kenneth van der Maazen\
+Laatst bijgewerkt: 29-05-2025\
 
 ![alt text](image.png)
 
