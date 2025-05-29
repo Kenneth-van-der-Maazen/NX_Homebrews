@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "NX",
+            "includePath": [
+                "c:/Users/Watcher-1/C++/Nintendo_Switch/Template/**",
+                "c:/devkitPro/devkitA64/include/**",
+                "c:/devkitPro/libnx/include/**",
+                "c:/devkitPro/devkitA64/aarch64-none-elf/include/**",
+                "c:/devkitPro/devkitA64/lib/gcc/aarch64-none-elf/13.2.0/include/**",
+                "c:/devkitPro/portlibs/switch/include/**"
+            ],
+            "defines": [
+                "SWITCH",
+                "__SWITCH__",
+                "DEBUG"
+            ],
+            "compilerPath": "C:/devkitPro/devkitA64/bin/aarch64-none-elf-g++",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64"
+        }
+    ],
+    "version": 4
+}
