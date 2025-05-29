@@ -1,13 +1,14 @@
 # NX_Homebrews
-Nintendo Switch Homebrew package with source codes\
-Developer: Kenneth van der Maazen\
-License: For Educational Purposes\
+Nintendo Switch Homebrews\ 
+all packages + source codes\
+Developed by: Kenneth-van-der-Maazen\
+Licensed by: Kenneth van der Maazen (C) 2025 - For Educational Purposes.
   
-Downloading, altering and or distributing this package without my permission is allowed.\
-However, I do not take any responsibility for any damage caused by the packages.\
-I am not liabale for any compensation in case of legal action by Nintendo or any other company.\
+Downloading and or altering and or distributing the packages without my permission is allowed.\
+However, I am not responsible for any damages that may be caused due to the useage of my packages.\
+Nor can or will I be held accountable for any legal issues that may arise due to the useage of the software.\
 You are responsible for your own actions.\
-Use this repository for education purposes and have fun!\
+Use this repository for educational purposes and have fun!
 
 ![alt text](image.png)
 
