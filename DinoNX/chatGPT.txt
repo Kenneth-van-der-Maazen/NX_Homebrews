@@ -1,0 +1,292 @@
+// Nintendo Switch Homebrew
+// 
+// Project:         DinoNX
+// Author:          Kenneth van der Maazen
+// Last modified:   23-10-2024
+// Version:         0.0.3
+// 
+// https://gist.github.com/marcusstenbeck/013ff7aa1d683229a2440acaaff70640
+
+#include <time.h>
+#include <unistd.h>
+
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_mixer.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_ttf.h>
+
+#include <switch.h>
+#include <iostream>
+#include <vector>
+#include <string.h>
+
+#include <stdlib.h>
+#include <stdio.h>
+
+#define JOY_A       0
+#define JOY_B       1
+#define JOY_X       2
+#define JOY_PLUS    10
+#define JOY_MINUS   11
+
+using namespace std;
+
+// Constants
+const int SCREEN_WIDTH = 1280;
+const int SCREEN_HEIGHT = 720;
+const int FPS = 60;
+
+const char* SPRITES_FOLDER = "romfs:/sprites/";  // Correct folder for ROMFS
+const double GRAVITY = 0.2;
+const double JUMP_FORCE = 7.0;
+
+// Runner Configuration
+struct RunnerConfig {
+    double ACCELERATION = 0.001;
+    double BG_CLOUD_SPEED = 0.2;
+    int BOTTOM_PAD = 10;
+    int CLEAR_TIME = 3000;
+    double CLOUD_FREQUENCY = 0.5;
+    int GAMEOVER_CLEAR_TIME = 750;
+    double GAP_COEFFICIENT = 0.6;
+    double GRAVITY = 0.6;
+    int INITIAL_JUMP_VELOCITY = 12;
+    int INVERT_FADE_DURATION = 12000;
+    int INVERT_DISTANCE = 700;
+    int MAX_CLOUDS = 6;
+    int MAX_OBSTACLE_LENGTH = 3;
+    int MAX_OBSTACLE_DUPLICATION = 2;
+    double MAX_SPEED = 13;
+    int MIN_JUMP_HEIGHT = 35;
+    int SPEED = 6;
+    int SPEED_DROP_COEFFICIENT = 3;
+};
+
+// Default Dimensions
+struct RunnerDimensions {
+    int WIDTH = SCREEN_WIDTH;
+    int HEIGHT = SCREEN_HEIGHT;
+};
+
+// Runner Class
+class Runner {
+public:
+    static Runner* instance;
+
+    RunnerConfig config;
+    RunnerDimensions dimensions;
+    double currentSpeed;
+    bool started;
+    bool activated;
+    bool crashed;
+    bool paused;
+    int highestScore;
+    double distanceRan;
+
+    Runner() {
+        if (instance) return;
+
+        instance = this;
+
+        currentSpeed = config.SPEED;
+        started = false;
+        activated = false;
+        crashed = false;
+        paused = false;
+        highestScore = 0;
+        distanceRan = 0;
+    }
+
+    static Runner* getInstance() {
+        if (!instance) {
+            instance = new Runner();
+        }
+        return instance;
+    }
+
+    void setSpeed(double speed) {
+        currentSpeed = speed;
+    }
+
+    void reset() {
+        started = false;
+        crashed = false;
+        paused = false;
+        distanceRan = 0;
+        highestScore = 0;
+    }
+
+    void startGame() {
+        started = true;
+        activated = true;
+        currentSpeed = config.SPEED;
+    }
+
+    void update(double deltaTime) {
+        if (activated) {
+            distanceRan += currentSpeed * deltaTime / (1000 / FPS);
+            if (currentSpeed < config.MAX_SPEED) {
+                currentSpeed += config.ACCELERATION;
+            }
+        }
+    }
+
+    void gameOver() {
+        crashed = true;
+        started = false;
+    }
+};
+
+Runner* Runner::instance = nullptr;
+
+SDL_Window *window = NULL;
+SDL_Renderer *renderer = NULL;
+
+SDL_Texture *dinoTexture = NULL;
+
+SDL_Event event;
+
+// Dino variables
+int dinoX = 100;
+int dinoY = SCREEN_HEIGHT - 48 - 40;
+double dinoYVelocity = 0.0;
+bool isJumping = false;
+
+// Initialize SDL to create window and renderer
+bool InitializeSDL()
+{
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_AUDIO) != 0) {
+        printf("ERROR: SDL_Init failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    window = SDL_CreateWindow("DinoNX", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    if (window == nullptr) {
+        printf("ERROR: SDL_CreateWindow failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (renderer == nullptr) {
+        printf("ERROR: SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
+bool LoadMedia()
+{
+    string dinoImagePath = SPRITES_FOLDER + string("dino.png");
+
+    SDL_Surface *dinoSurface = IMG_Load(dinoImagePath.c_str());
+    if (dinoSurface == nullptr) {
+        printf("ERROR: IMG_Load failed: %s\n", IMG_GetError());
+        return false;
+    }
+    dinoTexture = SDL_CreateTextureFromSurface(renderer, dinoSurface);
+    SDL_FreeSurface(dinoSurface);
+
+    if (dinoTexture == nullptr) {
+        printf("ERROR: SDL_CreateTextureFromSurface failed: %s\n", SDL_GetError());
+        return false;
+    }
+
+    return true;
+}
+
+// Handle dino jumping
+void HandleJump()
+{
+    if (!isJumping)
+    {
+        dinoYVelocity = - JUMP_FORCE;
+        isJumping = true;
+    }
+}
+
+// Update dino position and simulate gravity
+void UpdateDino()
+{
+    dinoY += static_cast<int>(dinoYVelocity);
+    dinoYVelocity += GRAVITY;
+
+    if (dinoY >= SCREEN_HEIGHT - 100 - 140)
+    {
+        dinoY = SCREEN_HEIGHT - 100 - 140;
+        dinoYVelocity = 0.0;
+        isJumping = false;
+    }
+}
+
+// Main program entrypoint
+int main(int argc, char* args[])
+{
+    romfsInit();
+    chdir("romfs:/");
+
+    Runner* runner = Runner::getInstance();
+    runner->startGame();
+    int exit_requested = 0;
+
+    if (!InitializeSDL())
+    {
+        printf("ERROR: SDL_Initialize failed!");
+        return 1;
+    }
+    if (!LoadMedia())
+    {
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    SDL_InitSubSystem(SDL_INIT_JOYSTICK);
+    SDL_JoystickEventState(SDL_ENABLE);
+    SDL_JoystickOpen(0);
+
+    // Main application loop
+    while (!exit_requested && appletMainLoop())
+    {
+        // Handle events
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_QUIT) {
+                exit_requested = 1;
+            }
+            
+            if (event.type == SDL_JOYBUTTONDOWN)
+            {
+                if (event.jbutton.button == JOY_MINUS) {
+                    exit_requested = 1;
+                }
+                if (event.jbutton.button == JOY_A || event.jbutton.button == JOY_B)
+                {
+                    HandleJump();
+                }
+            }
+            else if (event.type == SDL_FINGERDOWN)
+            {
+                HandleJump();
+            }
+        }
+
+        UpdateDino();
+        runner->update(16.67);
+
+        SDL_SetRenderDrawColor(renderer, 128, 128, 128, 0xFF);
+        SDL_RenderClear(renderer);
+
+        SDL_Rect dinoRect = {dinoX, dinoY, 89, 95};
+        SDL_RenderCopy(renderer, dinoTexture, NULL, &dinoRect);
+
+        SDL_RenderPresent(renderer);
+        SDL_Delay(1000 / FPS);  // Adjusting to ensure stable 60 FPS
+    }
+
+    runner->gameOver();
+    SDL_Quit();
+    romfsExit();
+    return 0;
+}
