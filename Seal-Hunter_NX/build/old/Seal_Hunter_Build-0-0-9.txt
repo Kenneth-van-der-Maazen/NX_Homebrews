@@ -1,0 +1,720 @@
+/*  Nintendo Switch homebrew projects 
+    by Kenneth van der Maazen (c) 2024
+
+    Seal Hunter is a free 2D shoot 'em up game for the Nintendo Switch.
+    Using a wide range of weapons, players must prevent harmful sea creatures, ranging from seals to polar bears, from reaching the ocean to ensure a good catch.
+
+    Date created:   07-11-2024
+    Last updated:   08-11-2024 @ 03:41
+
+    Build:  0.0.1
+        Character static png displays on screen.
+        Background set to black.
+        Character animation and movement implemented.
+
+    Build:  0.0.2
+        Character now holds starting pistol (USP).
+        Crosshair added with offset: 130 pixels left from character.
+
+    Build:  0.0.3
+        Include vector library.
+        Added backdrop png of an iceberg.
+        Added background png of the ice layer's reflection.
+        Changed some values where the character holds the gun wrong on y-axis, crosshair adjusted and background playable area is now set with borders.
+
+    Build:  0.0.4
+        Include SDL_ttf library for displaying texts.
+        Added HUD image on top of the screen.
+        Repositioned player sprite to the right side of the screen, in the middle of the ice vertically.
+
+    Build:  0.0.5
+        Starting pistol now able to fire 12 bullets.
+        Added a sound effect when pistol is fired.
+        Added sound effect when pistol is reloading.
+        Muzzle flash when pistol is fired now added, randomly chosen between 2 png.
+        Bullet counter added to crosshair.
+        Manual reloading is now implemented but not fully functional. *Issue: when all bullets are depleted, the pistol can't reload!
+
+    Build: 0.0.6
+        Reloading the pistol is now fixed, manual and automatic are both working!
+        Reloading now shows any% on top of the crosshair for the full duration of a reload.
+
+    Build: 0.0.7
+        Added new start menu screen.
+        Added a paused game screen.
+
+    Build: 0.0.8
+        Added a background image to start menu screen.
+        Background music added, - need to implement settings for disabling music tracks.
+        Pause menu added options to resume game, quit game, and go to settings.
+        Changed the name in Makefile from Seal Hunter NX -> The Seal Hunters
+
+    Build: 0.0.9
+        Start menu now correctly sized and displayed withing borders of the screen.
+*/
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+#include <vector>
+
+#include <switch.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_ttf.h>
+#include <SDL2/SDL_mixer.h>
+
+using namespace std;
+
+const int SCREEN_WIDTH = 1280;
+const int SCREEN_HEIGHT = 720;
+const int PLAYER_SPEED = 1;     // Snelheid van de speler
+const int ANIMATION_DELAY = 10; // Aantal frames tussen animatiewisselingen
+
+const int maxBullets_Pistol = 12;
+const int reloadTime_Pistol = 2000; // Reload tijd in milliseconden (2 seconden)
+
+/* GLOBALE VARIABELEN */
+bool quit = false;
+bool inStartScreen = true;
+bool isPaused = false;
+
+bool pistol = true;
+bool showMuzzleFlash = false;
+bool isReloading = false;
+
+Uint32 reloadStartTime = 0;     // Start tijd voor het herladen
+
+int score = 0;
+int muzzleFlashTimer = 0;
+int bulletCount = 0;        // Aantal schoten afgevuurd
+
+
+Mix_Chunk *pistolShootSound = nullptr;
+Mix_Chunk *pistolReloadSound = nullptr;
+
+Mix_Music* backgroundMusic = nullptr;
+
+TTF_Font* font = NULL;  // Font voor tekstweergave
+TTF_Font* dosTitleFont = NULL;
+TTF_Font* dosFont = NULL;
+
+SDL_Texture* muzzleFlashTextures[2];    // Array voor muzzle flash texture (Small)
+
+// Menu opties
+enum MenuOption { NEW_GAME, OPTIONS, STATS, HELP, QUIT };
+enum PauseOption { CONTINUE, SETTINGS, QUIT_TO_MAIN };
+MenuOption selectedOption = NEW_GAME;
+PauseOption selectedPauseOption = CONTINUE;
+
+// Speler
+struct Player {
+    int x, y;               // Positie van de speler
+    int width, height;      // Grootte van de speler
+    bool moving;            // Beweegt de speler op dit moment?
+    int frame;              // Huidige frame van de animatie
+    int frameCounter;       // Teller voor animatiewisseling
+    SDL_Texture* idleTexture;       // Statische sprite van de speler
+    SDL_Texture* walkTexture1;      // Eerste frame van de loopanimatie
+    SDL_Texture* walkTexture2;      // Tweede frame van de loopanimatie
+    SDL_Texture* weaponTexture;     // Wapen van de speler
+    SDL_Texture* crosshairTexture;  // Crosshair icoon links van de speler
+};
+
+struct Bullet {
+    int x, y;
+    int speed;
+    bool active;
+};
+vector<Bullet> bullets(maxBullets_Pistol);
+
+
+Player player;
+SDL_Texture* backdropTexture = NULL;    // Achtergrond afbeelding
+SDL_Texture* iceTexture = NULL;         // Ijslaag afbeelding
+SDL_Texture* hudTexture = NULL;         // HUD afbeelding
+SDL_Texture* startMenuBackgroundTexture = NULL; // Texture voor de achtergrond van het start menu
+
+// Functie om tekst te renderen
+void renderText(SDL_Renderer* renderer, const char* text, TTF_Font *font, int x, int y, SDL_Color color = {255, 255, 255}) {
+    SDL_Surface* surfaceMessage = TTF_RenderText_Solid(font, text, color);
+    SDL_Texture* message = SDL_CreateTextureFromSurface(renderer, surfaceMessage);
+
+    SDL_Rect messageRect;
+    messageRect.x = x;
+    messageRect.y = y;
+    messageRect.w = surfaceMessage->w;
+    messageRect.h = surfaceMessage->h;
+
+    // Render de teskt op het scherm
+    SDL_RenderCopy(renderer, message, NULL, &messageRect);
+
+    // Opruimen
+    SDL_DestroyTexture(message);
+    SDL_FreeSurface(surfaceMessage);
+}
+
+// Functie om de speler te initialiseren
+void initPlayer(SDL_Renderer* renderer) {
+    player.width = 24;          // Stel de breedte van de speler in
+    player.height = 40;         // Stel de hoogte van de speler in
+    player.x = SCREEN_WIDTH - player.width - 80;    // Plaats de speler aan de rechterkant, 20 pixels van de rand.
+    player.y = (SCREEN_HEIGHT / 2) + 80;            // Plaats de speler verticaal in het midden van het ijs.
+    
+    player.moving = false;      // De speler beweegt niet op het moment van initialisatie
+    player.frame = 0;           // Start met de eerste frame van de animatie
+    player.frameCounter = 0;    // Reset de framecounter
+
+    // Laad de statische sprite
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Player1/Stopped/anim.png");
+    player.idleTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+
+    // Laad het eerste loopframe
+    tempSurface = IMG_Load("romfs:/Assets/Player1/Walking/anim_1.png");
+    player.walkTexture1 = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+
+    // Laad het tweede loopframe
+    tempSurface = IMG_Load("romfs:/Assets/Player1/Walking/anim_2.png");
+    player.walkTexture2 = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+
+    // Laad het pistol wapen    - if (pistol = true) dan img load -> else statement van maken
+    tempSurface = IMG_Load("romfs:/Assets/Weapons/Hands/Blue/USP/usp.png");
+    if (!tempSurface) {
+        cerr << "Failed to load weapon texture: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.weaponTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+
+    // Laad de crosshair-afbeelding
+    tempSurface = IMG_Load("romfs:/Assets/Misc/blue_crosshair_1.png");
+    player.crosshairTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+}
+
+// Functie om muzzle flash textures te initialiseren
+void initMuzzleFlash(SDL_Renderer* renderer) {
+    SDL_Surface* tempSurface1 = IMG_Load("romfs:/Assets/Muzzle/Small/anim_1.png");
+    SDL_Surface* tempSurface2 = IMG_Load("romfs:/Assets/Muzzle/Small/anim_2.png");
+    muzzleFlashTextures[0] = SDL_CreateTextureFromSurface(renderer, tempSurface1);
+    muzzleFlashTextures[1] = SDL_CreateTextureFromSurface(renderer, tempSurface2);
+    SDL_FreeSurface(tempSurface1);
+    SDL_FreeSurface(tempSurface2);
+}
+
+void renderMuzzleFlash(SDL_Renderer* renderer) {
+    if (showMuzzleFlash && muzzleFlashTimer > 0) {
+        int randomIndex = rand() % 2;   // random keuze tussen 0 en 1
+        SDL_Rect muzzleRect = { player.x - 40, player.y + 9, 35, 20 };
+        SDL_RenderCopy(renderer, muzzleFlashTextures[randomIndex], NULL, &muzzleRect);
+        muzzleFlashTimer--;
+        if (muzzleFlashTimer <= 0) {
+            showMuzzleFlash = false;
+        }
+    }
+}
+
+// Functie om de achtergrond en ijslaag te initialiseren
+void initBackdropAndIce(SDL_Renderer* renderer) {
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Misc/backdrop.png"); // Laad de achtergrond
+    backdropTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+
+    tempSurface = IMG_Load("romfs:/Assets/Misc/ice.png");   // Laad de ijslaag
+    iceTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+}
+
+// Functie om de HUD-afbeelding te laden
+void initHUD(SDL_Renderer* renderer) {
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Misc/blueHUD.png");
+    if (!tempSurface) {
+        cerr << "ERROR_ " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    hudTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+}
+
+void renderHUD(SDL_Renderer* renderer) {
+    SDL_Rect hudRect = { 0, 0, SCREEN_WIDTH, 122 };  // Plaats bovenaan met de hoogte van de HUD afbeelding
+    SDL_RenderCopy(renderer, hudTexture, NULL, &hudRect);
+}
+
+
+
+// Functie om de achtergrond en ijslaag te renderen
+void renderBackdropAndIce(SDL_Renderer* renderer) {
+    // Render de achtergrond
+    SDL_Rect backdropRect = { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+    SDL_RenderCopy(renderer, backdropTexture, NULL, &backdropRect);
+
+    // Render de ijslaag bovenop de achtergrond
+    SDL_Rect iceRect = { 0, SCREEN_HEIGHT - 590, SCREEN_WIDTH, SCREEN_HEIGHT - 100 };   // Plaats de ijslaag onderaan het scherm
+    SDL_RenderCopy(renderer, iceTexture, NULL, &iceRect);
+}
+
+// Functie om de speler te renderen
+void renderPlayer(SDL_Renderer* renderer) {
+    SDL_Rect destRect = { player.x, player.y, player.width, player.height };
+    SDL_Texture* currentTexture = player.idleTexture;
+
+    if (player.moving) {
+        // Wissel tussen de twee animatieframes
+        if (player.frame == 0) {
+            currentTexture = player.walkTexture1;
+        } else {
+            currentTexture = player.walkTexture2;
+        }
+    }
+
+    // Render de speler
+    SDL_RenderCopy(renderer, currentTexture, NULL, &destRect);
+
+    // Render het wapen links van de speler
+    SDL_Rect weaponRect = { player.x - 10, player.y + 17, 34, 10 }; // Pas de offset en grootte aan van het wapen
+    SDL_RenderCopy(renderer, player.weaponTexture, NULL, &weaponRect);
+
+    // Render de crosshair links van de speler
+    SDL_Rect crosshairRect = { player.x - 100, player.y + 15, 16, 16 }; // Pas de offset en grootte aan van de crosshair
+    SDL_RenderCopy(renderer, player.crosshairTexture, NULL, &crosshairRect);
+}
+
+void startReloading() {
+    isReloading = true;
+    reloadStartTime = SDL_GetTicks();
+    Mix_PlayChannel(-1, pistolReloadSound, 0);
+}
+
+void shootBullet() {
+    if (isReloading || bulletCount >= maxBullets_Pistol) {
+        if (!isReloading && bulletCount >= maxBullets_Pistol) {
+            startReloading();   // Automatisch herladen wanneer kogels op zijn
+        }
+        return;
+    }
+
+    for (int i = 0; i < maxBullets_Pistol; ++i) {
+        if (!bullets[i].active) {
+            bullets[i].active = true;
+            bullets[i].x = player.x - player.width;
+            bullets[i].y = player.y + player.height / 2;
+            bullets[i].speed = 200;
+
+            Mix_PlayChannel(-1, pistolShootSound, 0);
+            showMuzzleFlash = true;
+            muzzleFlashTimer = 4;   // Display muzzle flash voor aantal frames
+
+            bulletCount++;
+            break;
+        }
+    }
+}
+
+
+
+void updateReload() {
+    if (isReloading && SDL_GetTicks() - reloadStartTime >= reloadTime_Pistol) {
+        isReloading = false;
+        bulletCount = 0;    // Reset bullet count na het herladen
+    } else if (!isReloading && bulletCount >= maxBullets_Pistol) {
+        startReloading();
+    }
+}
+
+void updateBullets() {
+    for (int i = 0; i < maxBullets_Pistol; ++i) {
+        if (bullets[i].active) {
+            bullets[i].x -= bullets[i].speed;   // Laat de bullet horizontaal bewegen
+            if (bullets[i].x < 0) {
+                bullets[i].active = false;
+            }
+        }
+    }
+}
+
+void renderBullets(SDL_Renderer* renderer) {
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); // Kleur voor kogels (wit)
+    for (int i = 0; i < maxBullets_Pistol; ++i) {
+        if (bullets[i].active) {
+            SDL_Rect bulletRect = { bullets[i].x, bullets[i].y, 120, 2}; // bullet grootte
+            SDL_RenderFillRect(renderer, &bulletRect);  // Teken de bullet in de window
+        }
+    }
+}
+
+void renderBulletCount(SDL_Renderer* renderer) {
+    if (isReloading) {
+        // Bereken herlaadpercentage op basis van de verstreken tijd
+        Uint32 elapsedTime = SDL_GetTicks() - reloadStartTime;
+        int reloadPercentage = (elapsedTime * 100) / reloadTime_Pistol;
+
+        // Beperk de waarde tussen 0 en 100%
+        if (reloadPercentage > 100) reloadPercentage = 100;
+
+        // Convert percentage naar tekst
+        string reloadText = to_string(reloadPercentage) + "%";
+        SDL_Color color = { 255, 0, 0 }; // Rood voor herlaadpercentage
+
+        // Maak de surface en texture voor het percentage
+        SDL_Surface* surface = TTF_RenderText_Solid(font, reloadText.c_str(), color);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+
+        // Plaats de tekst boven de crosshair
+        SDL_Rect textRect = { player.x - 100, player.y - 5, surface->w, surface->h };
+        SDL_RenderCopy(renderer, texture, NULL, &textRect);
+
+        // Opruimen
+        SDL_DestroyTexture(texture);
+        SDL_FreeSurface(surface);
+    } else {
+        // Toon normale bullet count als er niet wordt herladen
+        string bulletText = to_string(maxBullets_Pistol - bulletCount);
+
+        // Kies de juiste kleur op basis van het aantal resterende kogels
+        SDL_Color color;
+        if (maxBullets_Pistol - bulletCount <= 1) {
+            color = { 255, 165, 0 }; // Oranje als er 3 of minder kogels over zijn
+        } else {
+            color = { 0, 0, 0 };    // Zwart
+        }
+
+        SDL_Surface* surface = TTF_RenderText_Solid(font, bulletText.c_str(), color);
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+
+        SDL_Rect textRect = { player.x - 100, player.y -5, surface->w, surface->h };
+        SDL_RenderCopy(renderer, texture, NULL, &textRect);
+
+        SDL_DestroyTexture(texture);
+        SDL_FreeSurface(surface);
+    }
+}
+
+// Functie om de speler te verplaatsen op basis van invoer
+void handlePlayerMovement(PadState* pad) {
+    u64 kHeld = padGetButtons(pad);
+    player.moving = false;
+
+    if (kHeld & HidNpadButton_Up) {
+        player.y -= PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Down) {
+        player.y += PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Left) {
+        player.x -= PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Right) {
+        player.x += PLAYER_SPEED;
+        player.moving = true;
+    }
+
+    // Zorg ervoor dat de speler binnen het scherm blijft
+    if (player.x < 0) player.x = 0;
+    if (player.y < SCREEN_HEIGHT - 430) player.y = SCREEN_HEIGHT - 430; // Blijf op de ijslaag
+    if (player.x > SCREEN_WIDTH - player.width) player.x = SCREEN_WIDTH - player.width;
+    if (player.y > SCREEN_HEIGHT - 90) player.y = SCREEN_HEIGHT - 90;
+
+    // Update de animatie alleen als de speler beweegt
+    if (player.moving) {
+        player.frameCounter++;
+        if (player.frameCounter >= ANIMATION_DELAY) {
+            player.frame = (player.frame + 1) % 2;  // Wissel tussen 0 en 1
+            player.frameCounter = 0;
+        }
+    } else {
+        player.frame = 0; // Reset naar de eerste frame
+    }
+}
+
+
+// Functie om het startmenu weer te geven
+void renderStartMenu(SDL_Renderer* renderer) {
+    // Render de achtergrond afbeelding
+    if (startMenuBackgroundTexture) {
+        SDL_Rect bgRect = { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+        SDL_RenderCopy(renderer, startMenuBackgroundTexture, NULL, &bgRect);
+    }
+
+    SDL_Color white = { 255, 255, 255 };
+    SDL_Color yellow = { 255, 255, 0 };
+    SDL_Color black = { 0, 0, 0 };
+
+    // Stel een grotere font grootte in voor het menu
+    TTF_Font* largeFont = TTF_OpenFont("romfs:/fonts/Perfect DOS VGA 437.ttf", 64); // Grotere lettergrootte!
+
+    // Titel renderen
+    const char* titleText = "The Seal Hunter";
+    renderText(renderer, titleText, largeFont, SCREEN_WIDTH - 600, 20, white);  // -300 = The Se..
+
+    // Menu opties
+    const char* menuOptions[] = { "New Game", "Options", "Stats", "Help", "Quit" };
+
+    // Bepaal de startpositie voor het menui links onderaan
+    int startX = 50; // Linkerkant van het scherm
+    int startY = SCREEN_HEIGHT - 400; // Begin iets boven de onderkant van het scherm
+
+    // Render de menu opties onder elkaar
+    for (int i = 0; i < 5; i++) {
+        SDL_Color color = (i == selectedOption) ? yellow : black;   // Gele kleur voor de geselecteerde optie, anders zwart
+        renderText(renderer, menuOptions[i], dosTitleFont, startX, startY + i * 50, color);
+    }
+
+    // Tekst met naam en datum onderaan het hoofdmenu
+    const char* authorText = "by Kenneth van der Maazen (C) 2024.";
+    renderText(renderer, authorText, dosFont, SCREEN_WIDTH / 2 - 250, SCREEN_HEIGHT - 30, white);
+
+    // Opruimen van de code
+    TTF_CloseFont(largeFont);
+}
+
+// Functie voor het pauze menu
+void renderPauseMenu(SDL_Renderer* renderer) {
+    const char* pauseOptions[] = { "Continue", "Settings", "Quit to Main Menu" };
+    SDL_Color white = { 255, 255, 255 };
+    SDL_Color yellow = { 255, 255, 0 };
+
+    // Titel van het pauzemenu
+    renderText(renderer, "- GAME PAUSED -", dosTitleFont, SCREEN_WIDTH / 2 - 100, 100);
+
+    // Opties van het pauzemenu
+    for (int i = 0; i < 3; i++) {
+        SDL_Color color = (i == selectedPauseOption) ? yellow : white;
+        renderText(renderer, pauseOptions[i], dosFont, SCREEN_WIDTH / 2 - 50, 200 + i * 40, color);
+    }
+}
+
+// Functie om de invoer van het pauzemenu te verwerken
+void handlePauseMenuInput(PadState* pad) {
+    u64 kDown = padGetButtonsDown(pad);
+
+    if (kDown & HidNpadButton_Up) {
+        if (selectedPauseOption == 0) {
+            selectedPauseOption = QUIT_TO_MAIN;
+        } else {
+            selectedPauseOption = static_cast<PauseOption>(selectedPauseOption - 1);
+        }
+    } else if (kDown & HidNpadButton_Down) {
+        if (selectedPauseOption == QUIT_TO_MAIN) {
+            selectedPauseOption = CONTINUE;
+        } else {
+            selectedPauseOption = static_cast<PauseOption>(selectedPauseOption + 1);
+        }
+    } else if (kDown & HidNpadButton_A) {
+        // Voer actie uit op basis van de geselecteerde optie
+        switch (selectedPauseOption) {
+            case CONTINUE:
+                isPaused = false;
+                break;
+            case SETTINGS:
+                // Open de game settings
+                break;
+            case QUIT_TO_MAIN:
+                inStartScreen = true;
+                isPaused = false;
+                break;
+        }
+    }
+}
+
+// Functie om het menu te navigeren met Nintendo Switch controls
+void handleStartMenuInput(PadState* pad) {
+    u64 kDown = padGetButtonsDown(pad);
+
+    if (kDown & HidNpadButton_Up) {
+        if (selectedOption == NEW_GAME) {
+            selectedOption = QUIT;  // Spring naar het einde van menu
+        } else {
+            selectedOption = static_cast<MenuOption>(selectedOption -1);  // Ga naar vorige optie
+        }
+    } else if (kDown & HidNpadButton_Down) {
+        if (selectedOption == QUIT) {
+            selectedOption = NEW_GAME;  // Spring naar het begin van menu
+        } else {
+            selectedOption = static_cast<MenuOption>(selectedOption + 1);  // Ga naar volgende optie
+        }
+    } else if (kDown & HidNpadButton_A) {
+        // Voer actie uit op basis van de geselecteerde optie
+        switch (selectedOption) {
+            case NEW_GAME:
+                inStartScreen = false;  // Start het spel
+                break;
+            case OPTIONS:
+                // Voeg logica toe voor OPTIONS
+                break;
+            case STATS:
+                // Voeg logica toe voor STATS
+                break;
+            case HELP:
+                // Voeg logica toe voor HELP
+                break;
+            case QUIT:
+                quit = true; // Verlaat de game
+                break;
+        }
+    } else if (kDown & HidNpadButton_B) {
+        // Verlaat het startmenu zonder actie
+        inStartScreen = false;
+    }
+}
+
+// Functie om evenementen te verwerken
+void handleEvents(PadState* pad) {
+    u64 kDown = padGetButtonsDown(pad); // Knop die net ingedrukt is.
+
+    if (inStartScreen) {
+        handleStartMenuInput(pad);  // Handle start menu controls
+        //return; // Afsluiten om te voorkomen dat andere bedieningselementen worden bediend terwijl in het startscherm
+    } else if (isPaused) {
+        handlePauseMenuInput(pad);
+    } else {
+        if (kDown & HidNpadButton_B) {
+            shootBullet();
+        } else if (kDown & HidNpadButton_Y && !isReloading) {
+            startReloading();
+        } else if (kDown & HidNpadButton_Plus) {
+            isPaused = !isPaused;
+        }
+
+        handlePlayerMovement(pad);
+    }
+}
+
+// Main applicatie entrypoint
+int main(int argc, char* argv[]) {
+    romfsInit();
+    chdir("romfs:/");
+
+    // Configureer de controller invoer
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
+
+    SDL_Init(SDL_INIT_EVERYTHING);
+    TTF_Init();
+    
+    // Initialize SDL_mixer
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) == -1) {
+        printf("SDL_mixer: %s\n", Mix_GetError());
+        return -1;
+    }
+
+    backgroundMusic = Mix_LoadMUS("romfs:/Sound/Level1Background.mp3");
+
+    pistolShootSound = Mix_LoadWAV("romfs:/Sound/Weapons/Pistol/PistolFire.wav");
+    pistolReloadSound = Mix_LoadWAV("romfs:/Sound/Weapons/Pistol/PistolReload.wav");
+    backgroundMusic = Mix_LoadMUS("romfs:/Sound/Level1Background.mp3");
+
+    // Speel de achtergrond muziek in een oneindige loop af
+    Mix_PlayMusic(backgroundMusic, -1);
+
+    font = TTF_OpenFont("romfs:/fonts/vera.ttf", 12);
+    dosFont = TTF_OpenFont("romfs:/fonts/Perfect DOS VGA 437.ttf", 26);
+    dosTitleFont = TTF_OpenFont("romfs:/fonts/Perfect DOS VGA 437.ttf", 48);
+
+
+
+    SDL_Window* window = SDL_CreateWindow("Seal Hunter", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/UI/title_menu_bg.png");
+    if (!tempSurface) {
+        cerr << "Failed to load start menu background: " << IMG_GetError() << endl;
+        quit = true;
+    } else {
+        startMenuBackgroundTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+        SDL_FreeSurface(tempSurface);
+    }
+
+    // Initialiseer de speler
+    initPlayer(renderer);
+    initMuzzleFlash(renderer);
+    initBackdropAndIce(renderer);
+    initHUD(renderer);
+
+    srand(static_cast<unsigned>(time(0)));  // Seed random for muzzle flash
+
+    if (quit) {
+        // Als er een fout is opgetreden tijdens de initialisatie van de speler
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        TTF_Quit();
+        SDL_Quit();
+        romfsExit();
+        return -1;
+    }
+
+    
+    // GAME LOOP (Main)
+    while (!quit) {
+        // Verwerk de controller invoer
+        padUpdate(&pad);
+        handleEvents(&pad);
+        
+        // Wis het scherm
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // Zwarte achtergrond
+        SDL_RenderClear(renderer);
+
+        if (inStartScreen) {
+            renderStartMenu(renderer);
+        } else if (isPaused) {
+            renderPauseMenu(renderer);
+            //renderText(renderer, "- GAME PAUSED -", dosTitleFont, SCREEN_WIDTH / 2 - 100, SCREEN_HEIGHT / 2);
+            //renderText(renderer, "Press (+) to unpause", dosFont, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 80);
+        } else {
+            updateBullets();
+            updateReload(); // Check of reload complete is
+
+            renderBackdropAndIce(renderer); // Render de achtergrond en ijslaag
+            renderHUD(renderer);
+            renderPlayer(renderer);         // Render de speler
+            renderBullets(renderer);
+            renderMuzzleFlash(renderer);
+            renderBulletCount(renderer);
+        }
+        // Update het scherm
+        SDL_RenderPresent(renderer);
+    }
+
+    // Code Opruimen
+    Mix_HaltMusic();
+    Mix_FreeMusic(backgroundMusic);
+    backgroundMusic = nullptr;
+
+    Mix_FreeChunk(pistolShootSound);
+    Mix_FreeChunk(pistolReloadSound);
+
+    SDL_DestroyTexture(startMenuBackgroundTexture);
+    SDL_DestroyTexture(muzzleFlashTextures[0]);
+    SDL_DestroyTexture(muzzleFlashTextures[1]);
+    SDL_DestroyTexture(player.idleTexture);
+    SDL_DestroyTexture(player.walkTexture1);
+    SDL_DestroyTexture(player.walkTexture2);
+    SDL_DestroyTexture(player.weaponTexture);
+    SDL_DestroyTexture(player.crosshairTexture);
+    SDL_DestroyTexture(backdropTexture);
+    SDL_DestroyTexture(iceTexture);
+    SDL_DestroyTexture(hudTexture);
+
+    Mix_CloseAudio();
+    TTF_CloseFont(font);
+    TTF_CloseFont(dosFont);
+    TTF_CloseFont(dosTitleFont);
+    
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+
+    TTF_Quit();
+    SDL_Quit();
+    romfsExit();
+    return 0;
+}

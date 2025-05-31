@@ -1,0 +1,302 @@
+/*  Nintendo Switch homebrew projects 
+    by Kenneth van der Maazen (c) 2024
+
+    Seal Hunter is a free 2D shoot 'em up game for the Nintendo Switch.
+    Using a wide range of weapons, players must prevent harmful sea creatures, ranging from seals to polar bears, from reaching the ocean to ensure a good catch.
+
+    Date created:   07-11-2024
+    Last updated:   07-11-2024 @ 06:07
+
+    Build:  0.0.1
+            Character png displays on screen.
+            Background set to black.
+            Character animation and movement implemented.
+
+    Build:  0.0.2
+            Character now holds starting pistol (USP).
+            Crosshair added with offset: 130 pixels left from character.
+
+*/
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <iostream>
+
+#include <switch.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+
+using namespace std;
+
+const int SCREEN_WIDTH = 1280;
+const int SCREEN_HEIGHT = 720;
+const int PLAYER_SPEED = 5;     // Snelheid van de speler
+const int ANIMATION_DELAY = 10; // Aantal frames tussen animatiewisselingen
+
+// Spelerstructuur
+struct Player {
+    int x, y;               // Positie van de speler
+    int width, height;      // Grootte van de speler
+    bool moving;            // Beweegt de speler op dit moment?
+    int frame;              // Huidige frame van de animatie
+    int frameCounter;       // Teller voor animatiewisseling
+    SDL_Texture* idleTexture;   // Statische sprite van de speler
+    SDL_Texture* walkTexture1;  // Eerste frame van de loopanimatie
+    SDL_Texture* walkTexture2;  // Tweede frame van de loopanimatie
+    SDL_Texture* weaponTexture; // Wapen van de speler
+    SDL_Texture* crosshairTexture;  // Crosshair icoon links van de speler
+};
+
+// Globale variabelen
+bool quit = false;
+Player player;
+
+
+
+// Functie om de speler te initialiseren
+void initPlayer(SDL_Renderer* renderer) {
+    player.x = SCREEN_WIDTH / 2;
+    player.y = SCREEN_HEIGHT / 2;
+    player.width = 24;          // Stel de breedte van de speler in
+    player.height = 40;         // Stel de hoogte van de speler in
+    player.moving = false;      // De speler beweegt niet op het moment van initialisatie
+    player.frame = 0;           // Start met de eerste frame van de animatie
+    player.frameCounter = 0;    // Reset de framecounter
+
+    // Laad de statische sprite
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Player1/Stopped/anim.png");
+    if (!tempSurface) {
+        cerr << "Fout bij het laden van player_sprite.png: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.idleTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+    if (!player.idleTexture) {
+        cerr << "Fout bij het maken van idleTexture: " << SDL_GetError() << endl;
+        quit = true;
+        return;
+    }
+
+    // Laad het eerste loopframe
+    tempSurface = IMG_Load("romfs:/Assets/Player1/Walking/anim_1.png");
+    if (!tempSurface) {
+        cerr << "Fout bij het laden van anim_1.png: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.walkTexture1 = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+    if (!player.walkTexture1) {
+        cerr << "Fout bij het maken van walkTexture1: " << SDL_GetError() << endl;
+        quit = true;
+        return;
+    }
+
+    // Laad het tweede loopframe
+    tempSurface = IMG_Load("romfs:/Assets/Player1/Walking/anim_2.png");
+    if (!tempSurface) {
+        cerr << "Fout bij het laden van anim_2.png: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.walkTexture2 = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+    if (!player.walkTexture2) {
+        cerr << "Fout bij het maken van walkTexture2: " << SDL_GetError() << endl;
+        quit = true;
+        return;
+    }
+
+    // Laad het wapenbestand
+    tempSurface = IMG_Load("romfs:/Assets/Weapons/Hands/Blue/USP/usp.png");
+    if (!tempSurface) {
+        cerr << "Fout bij het laden van usp.png: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.weaponTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+    if (!player.weaponTexture) {
+        cerr << "Fout bij het maken van weaponTexture: " << SDL_GetError() << endl;
+        quit = true;
+        return;
+    }
+
+    // Laad de crosshair-afbeelding
+    tempSurface = IMG_Load("romfs:/Assets/Misc/blue_crosshair_1.png");
+    if (!tempSurface) {
+        cerr << "Fout bij het laden van blue_crosshair_1.png: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    player.crosshairTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+}
+
+// Functie om de speler te renderen
+void renderPlayer(SDL_Renderer* renderer) {
+    SDL_Rect destRect = { player.x, player.y, player.width, player.height };
+    SDL_Texture* currentTexture = player.idleTexture;
+
+    if (player.moving) {
+        // Wissel tussen de twee animatieframes
+        if (player.frame == 0) {
+            currentTexture = player.walkTexture1;
+        } else {
+            currentTexture = player.walkTexture2;
+        }
+    }
+
+    // Render de speler
+    SDL_RenderCopy(renderer, currentTexture, NULL, &destRect);
+
+    // Render het wapen links van de speler
+    SDL_Rect weaponRect = { player.x - 10, player.y + 15, 34, 10 }; // Pas de offset en grootte aan van het wapen
+    SDL_RenderCopy(renderer, player.weaponTexture, NULL, &weaponRect);
+
+    // Render de crosshair links van de speler
+    SDL_Rect crosshairRect = { player.x - 130, player.y + 10, 18, 18 }; // Pas de offset en grootte aan van de crosshair
+    SDL_RenderCopy(renderer, player.crosshairTexture, NULL, &crosshairRect);
+}
+
+// Functie om de speler te verplaatsen op basis van invoer
+void handlePlayerMovement(PadState* pad) {
+    u64 kHeld = padGetButtons(pad);
+    player.moving = false;
+
+    if (kHeld & HidNpadButton_Up) {
+        player.y -= PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Down) {
+        player.y += PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Left) {
+        player.x -= PLAYER_SPEED;
+        player.moving = true;
+    }
+    if (kHeld & HidNpadButton_Right) {
+        player.x += PLAYER_SPEED;
+        player.moving = true;
+    }
+
+    // Zorg ervoor dat de speler binnen het scherm blijft
+    if (player.x < 0) player.x = 0;
+    if (player.y < 0) player.y = 0;
+    if (player.x > SCREEN_WIDTH - player.width) player.x = SCREEN_WIDTH - player.width;
+    if (player.y > SCREEN_HEIGHT - player.height) player.y = SCREEN_HEIGHT - player.height;
+
+    // Update de animatie alleen als de speler beweegt
+    if (player.moving) {
+        player.frameCounter++;
+        if (player.frameCounter >= ANIMATION_DELAY) {
+            player.frame = (player.frame + 1) % 2;  // Wissel tussen 0 en 1
+            player.frameCounter = 0;
+        }
+    } else {
+        player.frame = 0; // Reset naar de eerste frame
+    }
+
+}
+
+// Functie om evenementen te verwerken
+void handleEvents(PadState* pad) {
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) {
+            quit = true;
+        }
+    }
+
+    handlePlayerMovement(pad);
+}
+
+// Main applicatie entrypoint
+int main(int argc, char* argv[]) {
+    romfsInit();
+    chdir("romfs:/");
+
+    // Configureer de controller invoer
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
+
+    // Initializeer SDL
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        cerr << "Fout bij het initialiseren van SDL: " << SDL_GetError() << endl;
+        romfsExit();
+        return -1;
+    }
+
+    // Initializeer SDL_image
+    if (!(IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG)) {
+        cerr << "Fout bij het initialiseren van SDL_image: " << IMG_GetError() << endl;
+        SDL_Quit();
+        romfsExit();
+        return -1;
+    }
+
+    SDL_Window* window = SDL_CreateWindow("Seal Hunter", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    if (!window) {
+        cerr << "Fout bij het maken van het venster: " << SDL_GetError() << endl;
+        IMG_Quit();
+        SDL_Quit();
+        romfsExit();
+        return -1;
+    }
+
+    SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    if (!renderer) {
+        cerr << "Fout bij het maken van de renderer: " << SDL_GetError() << endl;
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        romfsExit();
+        return -1;
+    }
+
+    // Initialiseer de speler
+    initPlayer(renderer);
+    if (quit) {
+        // Als er een fout is opgetreden tijdens de initialisatie van de speler
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        IMG_Quit();
+        SDL_Quit();
+        romfsExit();
+        return -1;
+    }
+
+    // GAME LOOP (Main)
+    while (!quit) {
+        // Verwerk de controller invoer
+        padUpdate(&pad);
+        handleEvents(&pad);
+
+        // Wis het scherm
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // Zwarte achtergrond
+        SDL_RenderClear(renderer);
+
+        // Render de speler
+        renderPlayer(renderer);
+
+        // Update het scherm
+        SDL_RenderPresent(renderer);
+    }
+
+    // Code Opruimen
+    SDL_DestroyTexture(player.idleTexture);
+    SDL_DestroyTexture(player.walkTexture1);
+    SDL_DestroyTexture(player.walkTexture2);
+    SDL_DestroyTexture(player.weaponTexture);
+    SDL_DestroyTexture(player.crosshairTexture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    IMG_Quit();
+    SDL_Quit();
+    romfsExit();
+    return 0;
+}
