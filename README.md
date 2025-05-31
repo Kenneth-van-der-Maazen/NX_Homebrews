@@ -12,17 +12,14 @@ Use this repository for educational purposes and have fun!
 
 ![alt text](image.png)
 
+![alt text](Music-Box-1.png)
 
+![alt text](seal-hunter-loop-1.png)
 
-📁 Dino_NX
+![alt text](seal-hunter-menu-1.png)
 
-📁 Guides+Examples
+![alt text](space-invadernx1-1.png)
 
-📁 MusicBox
+![alt text](space-invadernx2-1.png)
 
-📁 Seal-Hunter_NX
-
-📁 Space-Invaders_NX
-
-📁 Stickman-Fight
-
+![alt text](space-invadernx3-1.png)
