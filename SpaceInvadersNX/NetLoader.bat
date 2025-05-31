@@ -1,0 +1,1 @@
+nxlink -a 192.168.2.5 SpaceInvadersNX.nro
