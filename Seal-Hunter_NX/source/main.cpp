@@ -1,5 +1,5 @@
 /*  Nintendo Switch homebrew projects 
-    by Kenneth van der Maazen (c) 2024
+    by Kenneth van der Maazen (c) 2024 - 2025
 
     Seal Hunter is a free 2D shoot 'em up game, this version is written and programmed by me from scratch with the only goal for it to be playable on the Nintendo Switch.
     This game might trigger some people due to the content of seal hunting, but I want to make it clear that this game is not meant to promote or glorify seal hunting in any way.
@@ -12,7 +12,7 @@
 
 
     Date created:   07-11-2024
-    Last updated:   08-11-2024 @ 14:29
+    Last updated:   09-06-2025
 
     Build:  0.0.1
         Character static png displays on screen.
@@ -70,6 +70,31 @@
     Build: 0.1.1
         Added empty shell ejections from gun when fired, - still needs more tweeking.
 
+    Build: 0.1.2
+        Added new enemy type: Seal Cub.
+        Added Health Points (HP) to the enemies.
+        Added blood splatter effect when enemies are hit.
+        Added a new enemy spawn system. -> outside of screen.
+        Added kill counter & score counter.
+        Added Seal Cub death img.
+
+
+
+//////////////////// TO-DO LIST ////////////////////////
+[!] Level system needs to be implemented.
+[!] Player must be able to buy weapons and upgrades.
+[!] Game over variable needs to be implemented.
+[!] Enemies must fall dead in place
+
+[*] Isseu: Enemies do not spawn on Nintendo Switch, only on PC. [?]
+[*] Isseu: Seal does not respawn when killed.
+[*] Issue: Seal Cub moves from right to left, but needs to be the other way around?
+[*] Issue: Blood splatter effect is not working properly, gets stuck on x-axis like the bullet shells.
+[*] Player sprite needs adjustments, one of the animation .png is 1px off center, causing the animation to be off.
+[*] PAUSE screen needs to be transparent.
+[*] Player is able to press buttons while being shown a splash screen.
+
+
 */
 
 #include <string.h>
@@ -77,6 +102,7 @@
 #include <stdlib.h>
 #include <iostream>
 #include <vector>
+#include <algorithm>
 
 #include <switch.h>
 #include <SDL2/SDL.h>
@@ -90,27 +116,44 @@ const int SCREEN_WIDTH = 1280;
 const int SCREEN_HEIGHT = 720;
 const int PLAYER_SPEED = 4;     // Snelheid van de speler
 const int ANIMATION_DELAY = 10; // Aantal frames tussen animatiewisselingen
+const int SEAL_CUB_FRAMES = 6;
+SDL_Texture* sealCubTextures[SEAL_CUB_FRAMES];
+int sealCubFrame = 0;
+int sealCubFrameCounter = 0;
 
 const int maxBullets_Pistol = 12;
 const int reloadTime_Pistol = 2000; // Reload tijd in milliseconden (2 seconden)
+
+const int SEAL_CUB_DEATH_FRAMES = 9;
+SDL_Texture* sealCubDeathTextures[SEAL_CUB_DEATH_FRAMES];
 
 /* GLOBALE VARIABELEN */
 bool quit = false;
 bool inStartScreen = true;
 bool isPaused = false;
-
 bool pistol = true;
 bool showMuzzleFlash = false;
 bool isReloading = false;
-bool musicEnabled = true;
+bool musicEnabled = false;
 bool confirmingQuit = false;
+bool showSplash = true;
+
+// bool showSplash = true;
+Uint32 splashStartTime = 0;
+const Uint32 splashFadeInTime = 1000;   // 1 seconde
+const Uint32 splashVisibleTime = 2000;  // 1 seconde zichtbaar
+const Uint32 splashFadeOutTime = 1000;  // 1 seconde fade out
+const Uint32 splashTotalTime = splashFadeInTime + splashVisibleTime + splashFadeOutTime;
+
+SDL_Texture* splashTexture = nullptr;
+
 
 Uint32 reloadStartTime = 0;     // Start tijd voor het herladen
 
 int score = 0;
 int muzzleFlashTimer = 0;
 int bulletCount = 0;        // Aantal schoten afgevuurd
-
+int enemiesKilled = 0;
 
 Mix_Chunk *pistolShootSound = nullptr;
 Mix_Chunk *pistolReloadSound = nullptr;
@@ -134,6 +177,19 @@ OptionsMenuOption selectedOptionsMenuOption = TOGGLE_MUSIC;
 PauseOption selectedPauseOption = CONTINUE;
 QuitConfirmOption quitConfirmOption = MAIN_MENU;
 
+// Intro splashscreens
+struct SplashScreen {
+    SDL_Texture* texture;
+    Uint32 fadeInTime;
+    Uint32 visibleTime;
+    Uint32 fadeOutTime;
+};
+
+vector<SplashScreen> splashScreens;
+size_t currentSplashIndex = 0;
+Uint32 currentSplashStartTime = 0;
+// bool showSplash = true;
+
 // Speler
 struct Player {
     int x, y;               // Positie van de speler
@@ -154,6 +210,9 @@ struct Enemy {
     int speed;
     bool active;
     SDL_Texture* texture;
+    int health;
+    bool dead = false;
+    SDL_Texture* deathTexture = nullptr;
 };
 
 struct Bullet {
@@ -173,8 +232,26 @@ struct Shell {
 vector<Shell> shells;
 SDL_Texture* shellTextures[4];  // Array voor shell textures
 
+struct BloodSplatter {
+    int x, y;
+    SDL_Texture* texture;
+};
+vector<BloodSplatter> bloodSplatters;
+SDL_Texture* bloodTexture = nullptr;
+
+struct FloatingText {
+    string text;
+    int x, y;
+    Uint8 alpha;
+    Uint32 startTime;
+};
+vector<FloatingText> floatingTexts;
+
 Player player;
 Enemy brown_seal;
+
+vector<Enemy> seal_cubs;
+const int MAX_SEAL_CUBS = 5; // hoeveel tegelijk
 
 SDL_Texture* backdropTexture = NULL;    // Achtergrond afbeelding
 SDL_Texture* iceTexture = NULL;         // Ijslaag afbeelding
@@ -198,6 +275,16 @@ void renderText(SDL_Renderer* renderer, const char* text, TTF_Font *font, int x,
     // Opruimen
     SDL_DestroyTexture(message);
     SDL_FreeSurface(surfaceMessage);
+}
+
+void addFloatingText(string text, int x, int y) {
+    FloatingText ft;
+    ft.text = text;
+    ft.x = x;
+    ft.y = y;
+    ft.alpha = 255;
+    ft.startTime = SDL_GetTicks();
+    floatingTexts.push_back(ft);
 }
 
 // Functie om de speler te initialiseren
@@ -240,6 +327,12 @@ void initPlayer(SDL_Renderer* renderer) {
     tempSurface = IMG_Load("romfs:/Assets/Misc/blue_crosshair_1.png");
     player.crosshairTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
     SDL_FreeSurface(tempSurface);
+
+    if (!tempSurface) {
+    cerr << "ERROR: seal_cub.png not loaded - " << IMG_GetError() << endl;
+    quit = true;
+    return;
+}
 }
 
 void initBrownSeal(SDL_Renderer* renderer) {
@@ -247,12 +340,80 @@ void initBrownSeal(SDL_Renderer* renderer) {
     brown_seal.y = SCREEN_HEIGHT - 150;      // Plaats de brown seal aan de onderkant van het scherm
     brown_seal.width = 50;  // Stel de breedte van de brown seal
     brown_seal.height = 50; // Stel de hoogte van de brown seal
-    brown_seal.speed = 2;
+    brown_seal.speed = -2;
     brown_seal.active = true;
 
-    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Enemies/brown_seal.png");
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Enemies/brown_Seal/Walking/anim_1.png");
 
     brown_seal.texture = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    SDL_FreeSurface(tempSurface);
+}
+
+void initSealCubTextures(SDL_Renderer* renderer) {
+    for (int i = 0; i < SEAL_CUB_FRAMES; ++i) {
+        string path = "romfs:/Assets/Enemies/Seal_Cub/Walking/anim_" + to_string(i + 1) + ".png";
+        SDL_Surface* tempSurface = IMG_Load(path.c_str());
+        if (!tempSurface) {
+            cerr << "Failed to load seal cub texture " << i + 1 << ": " << IMG_GetError() << endl;
+            quit = true;
+            return;
+        }
+        sealCubTextures[i] = SDL_CreateTextureFromSurface(renderer, tempSurface);
+        SDL_FreeSurface(tempSurface);
+    }
+}
+
+void initSealCubDeathTextures(SDL_Renderer* renderer) {
+    for (int i = 0; i < SEAL_CUB_DEATH_FRAMES; ++i) {
+        string path = "romfs:/Assets/Enemies/Seal_Cub/Death1/anim_" + to_string(i + 1) + ".png";
+        SDL_Surface* tempSurface = IMG_Load(path.c_str());
+        if (!tempSurface) {
+            cerr << "Failed to load death texture " << i + 1 << ": " << IMG_GetError() << endl;
+            quit = true;
+            return;
+        }
+        sealCubDeathTextures[i] = SDL_CreateTextureFromSurface(renderer, tempSurface);
+        SDL_FreeSurface(tempSurface);
+    }
+}
+
+void spawnSealCub(SDL_Renderer* renderer) {
+    Enemy newCub;
+    newCub.width = 15;
+    newCub.height = 15;
+    newCub.x = SCREEN_WIDTH + (rand() % 200); // buiten zicht
+    newCub.y = SCREEN_HEIGHT - 90 - (rand() % 100); // Onderkant van het scherm (op het ijs)
+    newCub.speed = -2;              // Beweegt van rechts naar links
+    newCub.health = 10;
+    newCub.active = true;
+
+    newCub.texture = sealCubTextures[0];
+
+    seal_cubs.push_back(newCub);
+
+    // for (int i = 0; i < SEAL_CUB_FRAMES; ++i) {
+    //     string path = "romfs:/Assets/Enemies/Seal_Cub/Walking/anim_" + to_string(i + 1) + ".png";
+    //     SDL_Surface* tempSurface = IMG_Load(path.c_str());
+    //     if (!tempSurface) {
+    //         cerr << "Failed to load seal_cub frame " << i << ": " << IMG_GetError() << endl;
+    //         quit = true;
+    //         return;
+    //     }
+    //     sealCubTextures[i] = SDL_CreateTextureFromSurface(renderer, tempSurface);
+    //     SDL_FreeSurface(tempSurface);
+    // }
+
+    // seal_cub.texture = sealCubTextures[0]; // begin met eerste frame
+}
+
+void initBloodTexture(SDL_Renderer* renderer) {
+    SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/Blood/Hit/anim.png");
+    if (!tempSurface) {
+        cerr << "Failed to load blood splatter: " << IMG_GetError() << endl;
+        quit = true;
+        return;
+    }
+    bloodTexture = SDL_CreateTextureFromSurface(renderer, tempSurface);
     SDL_FreeSurface(tempSurface);
 }
 
@@ -263,6 +424,17 @@ void renderBrownSeal(SDL_Renderer* renderer) {
     }
 }
 
+void renderSealCubs(SDL_Renderer* renderer) {
+    for (const auto& cub : seal_cubs) {
+        SDL_Rect enemyRect = { cub.x, cub.y, cub.width, cub.height };
+        if (cub.dead && cub.deathTexture != nullptr) {
+            SDL_RenderCopy(renderer, cub.deathTexture, NULL, &enemyRect);
+        } else if (cub.active) {
+            SDL_RenderCopy(renderer, cub.texture, NULL, &enemyRect);
+        }
+    }
+}
+
 void updateBrownSeal() {
     if (brown_seal.active) {
         brown_seal.x += brown_seal.speed; // Beweegt naar rechts
@@ -270,6 +442,35 @@ void updateBrownSeal() {
         if (brown_seal.x + brown_seal.width < 0) {
             brown_seal.x = SCREEN_WIDTH; // Reset naar rechts
         }
+    }
+}
+
+void updateSealCubs() {
+    for (auto& cub : seal_cubs) {
+        if (cub.dead) continue; // Skip dode enemies
+
+        cub.x += cub.speed;
+
+        if (cub.x + cub.width < 0 || cub.health <= 0) {
+            cub.x = SCREEN_WIDTH + (rand() % 200);
+            cub.y = SCREEN_HEIGHT - 90 - (rand() % 100);
+            cub.health = 10;
+            cub.active = true;
+            cub.dead = false;
+            cub.deathTexture = nullptr;
+        }
+    }
+
+
+    // Animatie voor actieve cubs
+    sealCubFrameCounter++;
+    if (sealCubFrameCounter >= ANIMATION_DELAY) {
+        sealCubFrame = (sealCubFrame + 1) % SEAL_CUB_FRAMES;
+        for (auto& cub : seal_cubs) {
+            if (cub.active)
+                cub.texture = sealCubTextures[sealCubFrame];
+        }
+        sealCubFrameCounter = 0;
     }
 }
 
@@ -384,6 +585,14 @@ void renderHUD(SDL_Renderer* renderer) {
         // Render de puntenwaarde onder de afbeelding
         string pointsText = to_string(weaponPoints[i]) + "$";
         renderText(renderer, pointsText.c_str(), font, iconRect.x, iconRect.y + iconSize + 5);
+
+        // Geld en kill counter netjes samen
+        string moneyText = "$" + to_string(score);  // score = geld
+        renderText(renderer, moneyText.c_str(), dosFont, SCREEN_WIDTH - 180, 60, {255, 255, 255});
+
+        // Toon het aantal kills rechtsbovenin de HUD (wit, groot en netjes gepositioneerd)
+        string killsText = "Kills: " + to_string(enemiesKilled);
+        renderText(renderer, killsText.c_str(), dosFont, SCREEN_WIDTH - 180, 90, {255, 255, 255});
     }
 }
 
@@ -423,6 +632,27 @@ void renderPlayer(SDL_Renderer* renderer) {
     // Render de crosshair links van de speler
     SDL_Rect crosshairRect = { player.x - 100, player.y + 15, 16, 16 }; // Pas de offset en grootte aan van de crosshair
     SDL_RenderCopy(renderer, player.crosshairTexture, NULL, &crosshairRect);
+
+    // Weergave van het geldbedrag ($score) boven het hoofd van de speler
+    string moneyText = "$" + to_string(score);
+    SDL_Color moneyColor = { 0, 0, 0 }; // Witte tekst
+
+    SDL_Surface* surface = TTF_RenderText_Solid(font, moneyText.c_str(), moneyColor);
+    SDL_Texture* moneyTexture = SDL_CreateTextureFromSurface(renderer, surface);
+
+    // Plaats de tekst net boven het hoofd van de speler
+    SDL_Rect moneyRect = {
+        player.x - 10,                      // iets naar links om te centreren
+        player.y - 20,                      // boven het hoofd
+        surface->w,
+        surface->h
+    };
+
+    SDL_RenderCopy(renderer, moneyTexture, NULL, &moneyRect);
+
+    // Opruimen
+    SDL_DestroyTexture(moneyTexture);
+    SDL_FreeSurface(surface);
 }
 
 void startReloading() {
@@ -467,7 +697,24 @@ void shootBullet() {
     }
 }
 
+void updateFloatingTexts() {
+    Uint32 now = SDL_GetTicks();
+    for (auto& ft : floatingTexts) {
+        int elapsed = now - ft.startTime;
+        ft.y -= 1;  // Zweeft naar boven
+        int fade = 255 - (elapsed / 5);
+        ft.alpha = fade < 0 ? 0 : fade;
+    }
 
+    // Verwijder oude teksten
+    floatingTexts.erase(
+        remove_if(floatingTexts.begin(), floatingTexts.end(),
+            [](const FloatingText& ft) {
+                return ft.alpha == 0;
+            }),
+        floatingTexts.end()
+    );
+}
 
 void updateReload() {
     if (isReloading && SDL_GetTicks() - reloadStartTime >= reloadTime_Pistol) {
@@ -485,7 +732,60 @@ void updateBullets() {
             if (bullets[i].x < 0) {
                 bullets[i].active = false;
             }
+            for (auto& cub : seal_cubs) {
+                    if (!cub.active) continue;
+
+                    if (bullets[i].x < cub.x + cub.width &&
+                        bullets[i].x + 120 > cub.x &&
+                        bullets[i].y < cub.y + cub.height &&
+                        bullets[i].y + 2 > cub.y)
+                    {
+                        bullets[i].active = false;
+                        cub.health -= 1;
+
+                        // $10 per hit
+                        score += 10;
+                        addFloatingText("+$10", player.x, player.y);
+
+                        BloodSplatter splatter;
+                        splatter.x = cub.x + cub.width / 2;
+                        splatter.y = SCREEN_HEIGHT - 90;
+                        splatter.texture = bloodTexture;
+                        bloodSplatters.push_back(splatter);
+
+                        if (cub.health <= 0 && !cub.dead) {
+                        cub.active = false;
+                        cub.dead = true;
+                        int index = rand() % SEAL_CUB_DEATH_FRAMES;
+                        cub.deathTexture = sealCubDeathTextures[index];
+
+                        // $50 per kill
+                        score += 50;
+                        addFloatingText("+$50", player.x, player.y - 10);
+                        // Tel het aantal kills bij elkaar op
+                        enemiesKilled++;  
+                    }
+
+                    break;
+                }
+            }
         }
+    }
+}
+
+
+void renderFloatingTexts(SDL_Renderer* renderer) {
+    for (auto& ft : floatingTexts) {
+        SDL_Color color = { 0, 0, 0, ft.alpha };
+        SDL_Surface* surface = TTF_RenderText_Blended(font, ft.text.c_str(), {0, 0, 0});
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_SetTextureAlphaMod(texture, ft.alpha);
+
+        SDL_Rect rect = { ft.x, ft.y, surface->w, surface->h };
+        SDL_RenderCopy(renderer, texture, NULL, &rect);
+
+        SDL_DestroyTexture(texture);
+        SDL_FreeSurface(surface);
     }
 }
 
@@ -581,6 +881,12 @@ void renderBulletCount(SDL_Renderer* renderer) {
     }
 }
 
+void renderBloodSplatters(SDL_Renderer* renderer) {
+    for (const auto& splatter : bloodSplatters) {
+        SDL_Rect rect = { splatter.x - 12, splatter.y - 12, 10, 10 }; // iets groter/centraal
+        SDL_RenderCopy(renderer, splatter.texture, NULL, &rect);
+    }
+}
 
 // Functie om de speler te verplaatsen op basis van invoer
 void handlePlayerMovement(PadState* pad) {
@@ -878,7 +1184,7 @@ int main(int argc, char* argv[]) {
     backgroundMusic = Mix_LoadMUS("romfs:/Sound/Level1Background.mp3");
 
     // Speel de achtergrond muziek in een oneindige loop af
-    Mix_PlayMusic(backgroundMusic, -1);
+    
 
     font = TTF_OpenFont("romfs:/fonts/vera.ttf", 12);
     dosFont = TTF_OpenFont("romfs:/fonts/Perfect DOS VGA 437.ttf", 26);
@@ -888,6 +1194,45 @@ int main(int argc, char* argv[]) {
 
     SDL_Window* window = SDL_CreateWindow("Seal Hunter", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+
+    const char* splashPaths[] = {
+    "romfs:/Assets/UI/splashscreen1.png",
+    "romfs:/Assets/UI/splashscreen2.png",
+    // "romfs:/Assets/UI/splashscreen3.png"
+    };
+
+    for (const char* path : splashPaths) {
+        SDL_Surface* surface = IMG_Load(path);
+        if (!surface) {
+            cerr << "Failed to load splash screen: " << path << " - " << IMG_GetError() << endl;
+            quit = true;
+            break;
+        }
+        SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+        SDL_FreeSurface(surface);
+
+        splashScreens.push_back({ texture, 750, 1500, 750 }); // = totaal 3s per splash
+    }
+
+    if (!splashScreens.empty()) {
+        currentSplashStartTime = SDL_GetTicks();  // start tijd van eerste splash
+    }
+
+    // SDL_Surface* splashSurface = IMG_Load("romfs:/Assets/UI/splashscreen.png");
+    // if (!splashSurface) {
+    //     cerr << "Failed to load splash screen: " << IMG_GetError() << endl;
+    //     quit = true;
+    // } else {
+    //     splashTexture = SDL_CreateTextureFromSurface(renderer, splashSurface);
+    //     SDL_FreeSurface(splashSurface);
+
+    //     SDL_SetTextureBlendMode(splashTexture, SDL_BLENDMODE_BLEND);
+
+    //     splashStartTime = SDL_GetTicks();  // Start de timer
+    // }
+
+    // SDL_SetTextureBlendMode(splashTexture, SDL_BLENDMODE_BLEND);
 
     SDL_Surface* tempSurface = IMG_Load("romfs:/Assets/UI/title_menu_bg.png");
     if (!tempSurface) {
@@ -903,11 +1248,21 @@ int main(int argc, char* argv[]) {
     // Initialiseer de speler
     initPlayer(renderer);
     initBrownSeal(renderer);
+    initSealCubTextures(renderer);
+    initSealCubDeathTextures(renderer);
+    for (int i = 0; i < MAX_SEAL_CUBS; i++) {
+        spawnSealCub(renderer);
+    }
+    // initSealCub(renderer);
+    for (int i = 0; i < MAX_SEAL_CUBS; i++) {
+    spawnSealCub(renderer);
+    }
     initMuzzleFlash(renderer);
     initBackdropAndIce(renderer);
     initHUD(renderer);
     initWeapons(renderer);
     initShellTextures(renderer);
+    initBloodTexture(renderer);
 
     srand(static_cast<unsigned>(time(0)));  // Seed random for muzzle flash
 
@@ -921,7 +1276,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    
+    // cout << "seal_cubs.x = " << seal_cubs.x << endl;
     /*/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Code hieronder herhaalt zich gedurende de game, de loop stopt pas wanneer de game is beëindigd en is vaak ook een voorwaarde!
     \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\*/
@@ -933,6 +1288,45 @@ int main(int argc, char* argv[]) {
         // Wis het scherm
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255); // Zwarte achtergrond
         SDL_RenderClear(renderer);
+
+        if (showSplash && currentSplashIndex < splashScreens.size()) {
+            SplashScreen& splash = splashScreens[currentSplashIndex];
+            Uint32 elapsed = SDL_GetTicks() - currentSplashStartTime;
+            Uint32 totalTime = splash.fadeInTime + splash.visibleTime + splash.fadeOutTime;
+
+            Uint8 alpha = 255;
+            if (elapsed < splash.fadeInTime) {
+                alpha = (elapsed * 255) / splash.fadeInTime;
+            } else if (elapsed < splash.fadeInTime + splash.visibleTime) {
+                alpha = 255;
+            } else if (elapsed < totalTime) {
+                Uint32 fadeOutElapsed = elapsed - splash.fadeInTime - splash.visibleTime;
+                alpha = 255 - (fadeOutElapsed * 255) / splash.fadeOutTime;
+            } else {
+                // Ga naar volgende splash
+                currentSplashIndex++;
+                currentSplashStartTime = SDL_GetTicks();
+                if (currentSplashIndex >= splashScreens.size()) {
+                    showSplash = false;
+                }
+                if (!musicEnabled) {
+                    Mix_PauseMusic();
+                } else {
+                    Mix_PlayMusic(backgroundMusic, -1);
+                }
+                continue; // skip render voor dit frame
+            }
+
+            SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+            SDL_RenderClear(renderer);
+
+            SDL_SetTextureAlphaMod(splash.texture, alpha);
+            SDL_Rect splashRect = { 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT };
+            SDL_RenderCopy(renderer, splash.texture, NULL, &splashRect);
+
+            SDL_RenderPresent(renderer);
+            continue;
+        }
 
         if (inStartScreen) {
             renderStartMenu(renderer);
@@ -949,11 +1343,16 @@ int main(int argc, char* argv[]) {
             updateReload(); // Check of reload complete is
             updateShells();
             updateBrownSeal();
+            updateSealCubs();
+            updateFloatingTexts();
 
+            renderFloatingTexts(renderer);
             renderBackdropAndIce(renderer); // Render de achtergrond en ijslaag
+            renderBloodSplatters(renderer); 
             renderHUD(renderer);
             renderPlayer(renderer);         // Render de speler
             renderBrownSeal(renderer);
+            renderSealCubs(renderer);
             renderBullets(renderer);
             renderMuzzleFlash(renderer);
             renderShells(renderer);
@@ -967,15 +1366,20 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < 4; i++) {
         SDL_DestroyTexture(shellTextures[i]);
     }
+    // Opruimen van splashscreens
+    for (auto& splash : splashScreens) {
+        SDL_DestroyTexture(splash.texture);
+    }
 
     // Code Opruimen en ruimte vrij maken!
     Mix_HaltMusic();
     Mix_FreeMusic(backgroundMusic);
-    backgroundMusic = nullptr;
+    // backgroundMusic = nullptr;
 
     Mix_FreeChunk(pistolShootSound);
     Mix_FreeChunk(pistolReloadSound);
 
+    SDL_DestroyTexture(splashTexture);
     SDL_DestroyTexture(startMenuBackgroundTexture);
     SDL_DestroyTexture(muzzleFlashTextures[0]);
     SDL_DestroyTexture(muzzleFlashTextures[1]);
@@ -985,9 +1389,16 @@ int main(int argc, char* argv[]) {
     SDL_DestroyTexture(player.weaponTexture);
     SDL_DestroyTexture(player.crosshairTexture);
     SDL_DestroyTexture(backdropTexture);
+    SDL_DestroyTexture(bloodTexture);
     SDL_DestroyTexture(iceTexture);
     SDL_DestroyTexture(hudTexture);
     SDL_DestroyTexture(brown_seal.texture);
+    for (int i = 0; i < SEAL_CUB_FRAMES; ++i) {
+        SDL_DestroyTexture(sealCubTextures[i]);
+    }
+    for (int i = 0; i < SEAL_CUB_DEATH_FRAMES; ++i) {
+        SDL_DestroyTexture(sealCubDeathTextures[i]);
+    }
 
     Mix_CloseAudio();
     TTF_CloseFont(font);
